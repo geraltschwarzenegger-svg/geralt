@@ -1180,7 +1180,8 @@ ClampInt(val, lo, hi) {
 ParseGameExeList() {
     global cfg, gameExes
     gameExes := []
-    Loop, Parse, cfg.gameExeList, |
+    exeList := cfg.gameExeList
+    Loop, Parse, exeList, |
     {
         ex := Trim(A_LoopField)
         if (ex != "")
