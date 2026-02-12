@@ -1,5 +1,5 @@
 ﻿; ==============================================================================
-; МВД Helper v5.0 — AHK v1.1 Unicode — RELEASE
+; МВД Helper v5.1 — AHK v1.1 Unicode — RELEASE
 ; На базе Rivera & Deep (RP-тексты, погоны, пол) + ядро v4.3 (стабильность)
 ; ==============================================================================
 ; Changelog v5.0 (Rivera merge):
@@ -40,7 +40,7 @@ SetTitleMatchMode, 2
 ; ==============================================================================
 ; ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
 ; ==============================================================================
-global VERSION := "5.0"
+global VERSION := "5.1"
 global iniFile := "profiles.ini"
 
 global currentProfile := {}
@@ -78,6 +78,12 @@ global gOk1 := ""    ; "" / "а"
 global gOk2 := ""    ; "" / "ла"
 global gOk3 := "ся"  ; "ся" / "ась"
 
+; QuickMenu
+global qmItems := []
+global qmHotkey := "MButton"
+global qmGuiVisible := false
+global hQmGui := 0
+
 ; ==============================================================================
 ; ИНИЦИАЛИЗАЦИЯ
 ; ==============================================================================
@@ -86,6 +92,8 @@ LoadConfig()
 ParseGameExeList()
 UpdateSectionCache()
 LoadActiveProfile()
+LoadQuickMenuConfig()
+RegisterQuickMenuHotkey()
 DiagnosePrivileges()
 
 if (currentProfile.Rank == "") {
@@ -131,6 +139,7 @@ ShowGui:
     Gui, Add, Button, gBtnAdd x20 y410 w50 h30, +
     Gui, Add, Button, gBtnDel x75 y410 w50 h30, -
     Gui, Add, Button, gBtnLoad x130 y410 w70 h30, Загрузить
+    Gui, Add, Button, gBtnQuickMenu x20 y450 w180 h30, QuickMenu...
 
     ; === Правая колонка: форма ===
     Gui, Font, s12 Bold
@@ -321,6 +330,121 @@ GuiClose:
     Gui, Hide
 return
 
+BtnQuickMenu:
+    Gosub, ShowQMEditor
+return
+
+; ==============================================================================
+; QUICKMENU: РЕДАКТОР GUI
+; ==============================================================================
+ShowQMEditor:
+    LoadQuickMenuConfig()
+
+    Gui, QMEdit:Destroy
+    Gui, QMEdit:New, +AlwaysOnTop +HwndhQmEditGui
+    Gui, QMEdit:Color, 181C25, 232832
+    Gui, QMEdit:Font, s10 cWhite, Segoe UI
+
+    ; Хоткей открытия
+    Gui, QMEdit:Add, Text, x15 y15 cSilver, Клавиша открытия:
+    Gui, QMEdit:Add, Edit, vQMEditHotkey x160 y12 w120 h25 Background2E3440 cWhite Border, %qmHotkey%
+    Gui, QMEdit:Add, Text, x290 y15 c808080, (MButton, XButton1, F12...)
+
+    ; Заголовки колонок
+    qmYY := 50
+    Gui, QMEdit:Font, s9 Bold cSilver
+    Gui, QMEdit:Add, Text, x15  y%qmYY% w30,  #
+    Gui, QMEdit:Add, Text, x50  y%qmYY% w150, Название
+    Gui, QMEdit:Add, Text, x210 y%qmYY% w60,  Тип
+    Gui, QMEdit:Add, Text, x280 y%qmYY% w300, Payload (| = разделитель строк)
+
+    Gui, QMEdit:Font, s9 Norm cWhite
+    qmYY += 25
+
+    ; 9 строк элементов
+    Loop, 9 {
+        qi := A_Index
+        qmItem := qmItems[qi]
+        qmT  := qmItem.title
+        qmTP := qmItem.type
+        qmP  := qmItem.payload
+
+        Gui, QMEdit:Font, s9 cD4AF37
+        Gui, QMEdit:Add, Text, x15 y%qmYY% w30, %qi%.
+        Gui, QMEdit:Font, s9 cWhite
+        Gui, QMEdit:Add, Edit, vQMTitle%qi% x50  y%qmYY% w150 h22 Background2E3440 cWhite Border, %qmT%
+
+        ; Тип (SEQ/CMD)
+        qmChoose := (qmTP == "CMD") ? 2 : 1
+        Gui, QMEdit:Add, DropDownList, vQMType%qi% x210 y%qmYY% w60 Choose%qmChoose%, SEQ|CMD
+
+        Gui, QMEdit:Add, Edit, vQMPayload%qi% x280 y%qmYY% w310 h22 Background2E3440 cWhite Border, %qmP%
+
+        qmYY += 28
+    }
+
+    qmYY += 10
+    Gui, QMEdit:Font, s10 Bold cWhite
+    Gui, QMEdit:Add, Button, gQMEditSave x15 y%qmYY% w200 h35 Default, Сохранить
+    Gui, QMEdit:Add, Button, gQMEditDefaults x225 y%qmYY% w180 h35, Загрузить дефолт
+    Gui, QMEdit:Add, Button, gQMEditClose x415 y%qmYY% w175 h35, Закрыть
+
+    qmYY += 45
+    Gui, QMEdit:Font, s8 Norm c808080
+    Gui, QMEdit:Add, Text, x15 y%qmYY% w575, SEQ: строки через | (pipe).  CMD: шаблон с {ask:Подсказка|Дефолт} и {ask_digits:Подсказка}.
+    qmYY += 18
+    Gui, QMEdit:Add, Text, x15 y%qmYY% w575, {ok1}/{ok2}/{ok3} — гендерные окончания.  Пробел в конце payload = без Enter (для дописывания ID).
+
+    qmYY += 25
+    Gui, QMEdit:Show, w600 h%qmYY%, QuickMenu — Редактор
+return
+
+QMEditSave:
+    Gui, QMEdit:Submit, NoHide
+
+    ; Считываем хоткей
+    qmOldKey := qmHotkey
+    qmHotkey := Trim(QMEditHotkey)
+    if (qmHotkey == "")
+        qmHotkey := "MButton"
+
+    ; Считываем элементы
+    Loop, 9 {
+        qi := A_Index
+        qmItems[qi].title   := Trim(QMTitle%qi%)
+        qmItems[qi].type    := QMType%qi%
+        qmItems[qi].payload := QMPayload%qi%  ; без Trim — trailing space важен
+    }
+
+    SaveQuickMenuConfig()
+
+    ; Перерегистрация хоткея при изменении
+    if (qmOldKey != qmHotkey)
+        UpdateQuickMenuHotkey(qmHotkey)
+
+    MsgBox, 64, QuickMenu, Настройки QuickMenu сохранены!
+    LogWrite("QuickMenu config saved")
+return
+
+QMEditDefaults:
+    MsgBox, 4, QuickMenu, Загрузить стандартные настройки?`nТекущие будут перезаписаны.
+    IfMsgBox No
+        return
+
+    LoadQuickMenuDefaults()
+    SaveQuickMenuConfig()
+
+    ; Переоткрыть редактор для обновления полей
+    Gui, QMEdit:Destroy
+    Gosub, ShowQMEditor
+return
+
+QMEditClose:
+QMEditGuiClose:
+QMEditGuiEscape:
+    Gui, QMEdit:Destroy
+return
+
 ; ==============================================================================
 ; СИСТЕМНЫЕ ХОТКЕИ (работают всегда)
 ; ==============================================================================
@@ -352,6 +476,9 @@ return
     ParseGameExeList()
     UpdateSectionCache()
     LoadActiveProfile()
+    UnregisterQuickMenuHotkey()
+    LoadQuickMenuConfig()
+    RegisterQuickMenuHotkey()
     TrayTip, МВД Helper, Конфиг перезагружен!, 2, 1
     LogWrite("Config reloaded")
 return
@@ -704,6 +831,11 @@ return
 return
 
 #If ; конец контекстных хоткеев
+
+; --- QuickMenu: цель динамического хоткея ---
+QuickMenuOpen:
+    ShowQuickMenu()
+return
 
 ; ==============================================================================
 ; CORE: Guard / Release
@@ -1059,6 +1191,331 @@ ParseGameExeList() {
 }
 
 ; ==============================================================================
+; QUICKMENU: CONFIG / PARSE / EXECUTE
+; ==============================================================================
+LoadQuickMenuConfig() {
+    global iniFile, qmItems, qmHotkey
+
+    raw := ReadIniStr("QuickMenu", "QuickMenuKey", "MButton")
+    qmHotkey := (Trim(raw) == "") ? "MButton" : Trim(raw)
+
+    qmItems := []
+    Loop, 9 {
+        i := A_Index
+        t  := ReadIniStr("QuickMenu", "Item" . i . "_Title", "")
+        tp := ReadIniStr("QuickMenu", "Item" . i . "_Type", "")
+        ; Payload: без Trim — trailing space = pressEnter:=false
+        IniRead, p, %iniFile%, QuickMenu, Item%i%_Payload, %A_Space%
+
+        if (tp != "SEQ" && tp != "CMD")
+            tp := ""
+
+        qmItems.Push({idx: i, title: t, type: tp, payload: p})
+    }
+
+    ; Первый запуск — загрузить дефолты
+    allEmpty := true
+    for i, item in qmItems {
+        if (item.title != "") {
+            allEmpty := false
+            break
+        }
+    }
+    if (allEmpty) {
+        LoadQuickMenuDefaults()
+        SaveQuickMenuConfig()
+        LogWrite("QuickMenu: loaded defaults (first run)")
+    }
+}
+
+SaveQuickMenuConfig() {
+    global iniFile, qmItems, qmHotkey
+
+    IniWrite, %qmHotkey%, %iniFile%, QuickMenu, QuickMenuKey
+    IniWrite, LIST, %iniFile%, QuickMenu, QuickMenuMode
+
+    Loop, 9 {
+        i := A_Index
+        item := qmItems[i]
+        t  := item.title
+        tp := item.type
+        p  := item.payload
+        IniWrite, %t%,  %iniFile%, QuickMenu, Item%i%_Title
+        IniWrite, %tp%, %iniFile%, QuickMenu, Item%i%_Type
+        IniWrite, %p%,  %iniFile%, QuickMenu, Item%i%_Payload
+    }
+}
+
+LoadQuickMenuDefaults() {
+    global qmItems, qmHotkey
+
+    qmHotkey := "MButton"
+    qmItems := []
+
+    ; 1: Планшет (достать)
+    qmItems.Push({idx: 1, title: "Планшет (достать)"
+        , type: "SEQ"
+        , payload: "/do Планшет марки ""T1 MAX"" находится в кармане сумки.|/me достав планшет из кармана и включил{ok1} его"})
+
+    ; 2: Планшет (убрать)
+    qmItems.Push({idx: 2, title: "Планшет (убрать)"
+        , type: "SEQ"
+        , payload: "/me заблокировал{ok1} планшет марки ""T1 MAX"" и убрал{ok1} в карман сумки"})
+
+    ; 3: Наручники (надеть)
+    qmItems.Push({idx: 3, title: "Наручники"
+        , type: "SEQ"
+        , payload: "/me заломив руки гражданину, зафиксировал{ok1} их|/do Руки гражданина зафиксированы.|/cuff "})
+
+    ; 4: Конвой
+    qmItems.Push({idx: 4, title: "Конвой (/arr)"
+        , type: "CMD"
+        , payload: "/arr {ask_digits:ID гражданина}"})
+
+    ; 5: Обыск
+    qmItems.Push({idx: 5, title: "Обыск"
+        , type: "SEQ"
+        , payload: "/me надел{ok1} стерильные перчатки и начал{ok1} обыск|/me прощупал{ok1} одежду и проверил{ok1} содержимое карманов|/search "})
+
+    ; 6: Штраф
+    qmItems.Push({idx: 6, title: "Штраф (/tsu)"
+        , type: "CMD"
+        , payload: "/tsu {ask_digits:ID} {ask_digits:Сумма} {ask:Статья|6.1 УК РП}"})
+
+    ; 7: Мегафон: Остановка
+    qmItems.Push({idx: 7, title: "Мегафон: Остановка"
+        , type: "SEQ"
+        , payload: "/me снял{ok1} рупор с крепления, зажал{ok1} кнопку и поднёс{ok2} его ко рту|/m Водитель впередиидущего ТС, принимаем крайнее правое положение и останавливаемся!|/me отжал{ok1} кнопку, повесив рупор обратно в крепление"})
+
+    ; 8-9: пустые
+    qmItems.Push({idx: 8, title: "", type: "", payload: ""})
+    qmItems.Push({idx: 9, title: "", type: "", payload: ""})
+}
+
+ParseSeqPayload(payload) {
+    global gOk1, gOk2, gOk3
+    lines := []
+    Loop, Parse, payload, |
+    {
+        line := A_LoopField
+        if (Trim(line) != "") {
+            StringReplace, line, line, {ok1}, %gOk1%, All
+            StringReplace, line, line, {ok2}, %gOk2%, All
+            StringReplace, line, line, {ok3}, %gOk3%, All
+            lines.Push(line)
+        }
+    }
+    return lines
+}
+
+ParseCmdPayload(payload) {
+    global gOk1, gOk2, gOk3
+
+    ; Гендерные плейсхолдеры
+    StringReplace, payload, payload, {ok1}, %gOk1%, All
+    StringReplace, payload, payload, {ok2}, %gOk2%, All
+    StringReplace, payload, payload, {ok3}, %gOk3%, All
+
+    ; {ask:Prompt|Default}
+    while (RegExMatch(payload, "\{ask:([^}]*)\}", qmMatch)) {
+        parts := qmMatch1
+        pos := InStr(parts, "|")
+        if (pos) {
+            prompt := SubStr(parts, 1, pos - 1)
+            def := SubStr(parts, pos + 1)
+        } else {
+            prompt := parts
+            def := ""
+        }
+        val := AskReq(prompt, def)
+        if (val == "")
+            return ""
+        StringReplace, payload, payload, %qmMatch%, %val%
+    }
+
+    ; {ask_digits:Prompt}
+    while (RegExMatch(payload, "\{ask_digits:([^}]*)\}", qmMatch)) {
+        val := AskDigits(qmMatch1)
+        if (val == "")
+            return ""
+        StringReplace, payload, payload, %qmMatch%, %val%
+    }
+
+    return payload
+}
+
+ShowQuickMenu() {
+    global qmItems, qmGuiVisible, hQmGui, busy
+
+    ; Не открывать если busy
+    if (busy || qmGuiVisible)
+        return
+
+    ; Проверяем что есть хотя бы один элемент
+    hasItems := false
+    for i, item in qmItems {
+        if (item.title != "") {
+            hasItems := true
+            break
+        }
+    }
+    if (!hasItems) {
+        TrayTip, МВД Helper, QuickMenu пуст. Настройте через Alt+M., 2, 2
+        return
+    }
+
+    Gui, QM:Destroy
+    Gui, QM:New, +AlwaysOnTop +ToolWindow -Caption +HwndhQmGui
+    Gui, QM:Color, 181C25
+    Gui, QM:Margin, 10, 8
+    Gui, QM:Font, s12 Bold cD4AF37, Segoe UI
+    Gui, QM:Add, Text, x10 y8 w220 Center, QuickMenu
+
+    Gui, QM:Font, s10 Norm
+    qmPopY := 38
+    for i, item in qmItems {
+        if (item.title != "") {
+            qmClr := (item.type == "CMD") ? "c87CEEB" : "cWhite"
+            Gui, QM:Font, s10 %qmClr%
+            qmDisp := i . ".  " . item.title
+            Gui, QM:Add, Text, x15 y%qmPopY% w210, %qmDisp%
+            qmPopY += 24
+        }
+    }
+
+    qmPopY += 4
+    Gui, QM:Font, s8 c606060
+    Gui, QM:Add, Text, x10 y%qmPopY% w220 Center, [1-9] выбрать   [Esc] закрыть
+    qmPopY += 18
+
+    SysGet, MonW, 78
+    SysGet, MonH, 79
+    qmGuiW := 240
+    qmGuiH := qmPopY + 8
+    qmPosX := (MonW - qmGuiW) // 2
+    qmPosY := (MonH - qmGuiH) // 2
+
+    qmGuiVisible := true
+    Gui, QM:Show, x%qmPosX% y%qmPosY% w%qmGuiW% h%qmGuiH%
+
+    ; Захват одной клавиши (5 сек таймаут, Esc для закрытия)
+    Input, qmKey, L1 T5, {Escape}
+    qmInputErr := ErrorLevel
+
+    qmGuiVisible := false
+    Gui, QM:Destroy
+
+    ; Вернуть фокус игре
+    ReactivateGame()
+
+    if (qmInputErr == "Timeout" || qmInputErr == "EndKey:Escape")
+        return
+
+    ; Если нажата 1-9
+    if qmKey is integer
+    {
+        if (qmKey >= 1 && qmKey <= 9)
+            ExecuteQuickMenuItem(qmKey)
+    }
+}
+
+ExecuteQuickMenuItem(idx) {
+    global qmItems, cfg
+
+    if (idx < 1 || idx > 9)
+        return
+
+    item := qmItems[idx]
+    if (item.title == "" || item.type == "" || item.payload == "")
+        return
+
+    if (!Guard())
+        return
+
+    try {
+        if (item.type == "SEQ") {
+            lines := ParseSeqPayload(item.payload)
+            if (lines.Length() > 0) {
+                ; Если последний элемент raw payload заканчивается пробелом — без Enter
+                rawParts := StrSplit(item.payload, "|")
+                lastRaw := rawParts[rawParts.Length()]
+                if (SubStr(lastRaw, 0) == " " && lines.Length() > 1) {
+                    allButLast := []
+                    Loop, % lines.Length() - 1
+                        allButLast.Push(lines[A_Index])
+                    Seq(allButLast, cfg.seqMin, cfg.seqMax)
+                    Random, qmPause, % cfg.seqMin, % cfg.seqMax
+                    Sleep, %qmPause%
+                    SendChat(lines[lines.Length()], false)
+                } else if (SubStr(lastRaw, 0) == " " && lines.Length() == 1) {
+                    SendChat(lines[1], false)
+                } else {
+                    Seq(lines, cfg.seqMin, cfg.seqMax)
+                }
+            }
+        }
+        else if (item.type == "CMD") {
+            cmd := ParseCmdPayload(item.payload)
+            if (cmd != "") {
+                pressEnter := (SubStr(item.payload, 0) != " ")
+                SendChat(cmd, pressEnter)
+            }
+        }
+    } finally {
+        Release()
+    }
+}
+
+RegisterQuickMenuHotkey() {
+    global qmHotkey
+
+    Hotkey, If, IsGameActive()
+    try {
+        Hotkey, %qmHotkey%, QuickMenuOpen, On
+    } catch e {
+        qmHotkey := "MButton"
+        try {
+            Hotkey, %qmHotkey%, QuickMenuOpen, On
+        }
+        LogWrite("WARN: QuickMenuKey invalid, fallback to MButton")
+    }
+    Hotkey, If
+}
+
+UnregisterQuickMenuHotkey() {
+    global qmHotkey
+    try {
+        Hotkey, If, IsGameActive()
+        Hotkey, %qmHotkey%, QuickMenuOpen, Off
+        Hotkey, If
+    }
+}
+
+UpdateQuickMenuHotkey(newKey) {
+    global qmHotkey
+    UnregisterQuickMenuHotkey()
+    qmHotkey := (Trim(newKey) == "") ? "MButton" : Trim(newKey)
+    RegisterQuickMenuHotkey()
+}
+
+ReactivateGame() {
+    global gameExes
+    for _, ex in gameExes {
+        if WinExist("ahk_exe " . ex) {
+            WinActivate
+            return
+        }
+    }
+}
+
+QMGuiClose:
+QMGuiEscape:
+    qmGuiVisible := false
+    Gui, QM:Destroy
+    ReactivateGame()
+return
+
+; ==============================================================================
 ; SECTION CACHE
 ; ==============================================================================
 UpdateSectionCache() {
@@ -1087,7 +1544,7 @@ SectionExists(name) {
 }
 
 IsReservedSection(name) {
-    return (name = "Main" || name = "Config")
+    return (name = "Main" || name = "Config" || name = "QuickMenu")
 }
 
 ; ==============================================================================
@@ -1164,7 +1621,7 @@ RefreshList() {
 
     names := ""
     for s, _ in sectionSet {
-        if (s == "Main" || s == "Config")
+        if (s == "Main" || s == "Config" || s == "QuickMenu")
             continue
         names .= s . "`n"
     }
